@@ -11,6 +11,7 @@ application entry point.  All functional logic is delegated to:
 - widgets.py         – Reusable custom Qt widgets
 """
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -18,7 +19,7 @@ from typing import Any, List, Optional, cast
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, Signal, Slot, QSize
+from PySide6.QtCore import Qt, Signal, Slot, QSize, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -55,6 +56,10 @@ from widgets import ZoomableLabel
 from workers import VideoWorker
 
 
+# ── config path ─────────────────────────────────────────────────
+_CONFIG_PATH = Path(__file__).parent / "app_config.json"
+
+
 # ═══════════════════════════════════════════════════════════════
 #  MainWindow – UI Display & Controls
 # ═══════════════════════════════════════════════════════════════
@@ -88,6 +93,10 @@ class MainWindow(QWidget):
         self._relay_port: int = 502
         self._relay_min_on_seconds: float = 1.0
         self._relay_mappings = create_default_mappings()
+        self._relay_retry_count: int = 0
+        self._relay_max_retries: int = 5
+        self._relay_retry_delay_ms: int = 3000  # 3 seconds between retries
+        self._relay_auto_connect: bool = False
 
         # ── metrics ─────────────────────────────────────────────
         self._fps_counter: int = 0
@@ -113,6 +122,7 @@ class MainWindow(QWidget):
         self._assemble_layout()
 
         self.scan_cameras()
+        self._auto_load_config()
 
     # ═══════════════════════════════════════════════════════════
     #  UI BUILDING HELPERS
@@ -145,11 +155,23 @@ class MainWindow(QWidget):
         except Exception:
             self._worker.set_device("cpu")
 
+        self.save_config_button = QPushButton("💾 Save Config")
+        self.save_config_button.clicked.connect(self.save_config)
+        self.save_config_button.setMinimumHeight(40)
+        self.save_config_button.setMaximumWidth(140)
+
+        self.load_config_button = QPushButton("📂 Load Config")
+        self.load_config_button.clicked.connect(self.load_config)
+        self.load_config_button.setMinimumHeight(40)
+        self.load_config_button.setMaximumWidth(140)
+
         header_layout.addWidget(QLabel("Model:"), 0)
         header_layout.addWidget(self.model_label, 1)
         header_layout.addWidget(self.load_model_button, 0)
         header_layout.addWidget(QLabel("Compute:"), 0)
         header_layout.addWidget(self.compute_combo, 0)
+        header_layout.addWidget(self.save_config_button, 0)
+        header_layout.addWidget(self.load_config_button, 0)
         self._header_frame.setLayout(header_layout)
 
     def _build_metrics(self) -> None:
@@ -617,8 +639,16 @@ class MainWindow(QWidget):
     def _evaluate_mappings_with_distance(self) -> List[str]:
         """Evaluate relay mappings considering both class and distance."""
         matched = []
+        now = time.time()
+
         for row, mapping in enumerate(self._relay_mappings):
+            channel = mapping["channel"]
+
             if mapping["class"] is None:
+                # Turn off relay if it was previously on
+                if mapping["last_state"]:
+                    self._relay_set_channel(channel, False)
+                    mapping["last_state"] = False
                 continue
 
             class_name = mapping["class"]
@@ -626,26 +656,50 @@ class MainWindow(QWidget):
             distance_max = mapping.get("distance_max", 10000)
 
             # Check if class is detected
-            if class_name not in self._class_counts:
-                mapping["last_state"] = False
-                continue
+            detected = class_name in self._class_counts
 
             # Check if any detection of this class is within distance range
             matched_distance = False
-            for det_data in self._center_lines_data:
-                if det_data["class_name"] == class_name:
-                    distance = det_data["distance_px"]
-                    if distance_min <= distance <= distance_max:
-                        matched_distance = True
-                        break
+            if detected:
+                for det_data in self._center_lines_data:
+                    if det_data["class_name"] == class_name:
+                        distance = det_data["distance_px"]
+                        if distance_min <= distance <= distance_max:
+                            matched_distance = True
+                            break
 
-            if matched_distance:
+            if matched_distance and not mapping["last_state"]:
+                # Turn ON: detection matched and relay was off
+                self._relay_set_channel(channel, True)
                 mapping["last_state"] = True
+                mapping["last_on_time"] = now
                 matched.append(class_name)
-            else:
-                mapping["last_state"] = False
+            elif matched_distance and mapping["last_state"]:
+                # Still matched, keep on
+                matched.append(class_name)
+            elif not matched_distance and mapping["last_state"]:
+                # No longer matched — turn off after min-on time
+                elapsed_on = now - mapping.get("last_on_time", 0)
+                if elapsed_on >= self._relay_min_on_seconds:
+                    self._relay_set_channel(channel, False)
+                    mapping["last_state"] = False
+                else:
+                    # Keep it on until min-on time elapses
+                    matched.append(class_name)
 
         return matched
+
+    def _relay_set_channel(self, channel: int, on: bool) -> None:
+        """Send relay on/off command to hardware."""
+        if not self._relay_connected or self._relay is None:
+            return
+        try:
+            if on:
+                self._relay.on(channel)
+            else:
+                self._relay.off(channel)
+        except Exception as e:
+            self.status_label.setText(f"Relay CH{channel} error: {e}")
 
     def _set_relay_status_cell(self, row: int, is_on: bool) -> None:
         item = self.relay_mapping_table.item(row, 4)
@@ -673,6 +727,7 @@ class MainWindow(QWidget):
 
         self._relay_host = self.relay_host_input.text().strip()
         self._relay_port = self.relay_port_spin.value()
+        self._relay_retry_count = 0
 
         self.relay_status_label.setText("Status: Connecting...")
         self.relay_status_label.setStyleSheet("font-size: 11pt; color: #ffd43b; font-weight: bold;")
@@ -690,6 +745,7 @@ class MainWindow(QWidget):
         if success and self._relay_worker is not None:
             self._relay = self._relay_worker.relay
             self._relay_connected = True
+            self._relay_retry_count = 0
             self.relay_status_label.setText(f"Status: Connected ({self._relay_host}:{self._relay_port})")
             self.relay_status_label.setStyleSheet("font-size: 11pt; color: #51cf66; font-weight: bold;")
             self.relay_connect_button.setText("🔌 Disconnect Relay")
@@ -699,17 +755,52 @@ class MainWindow(QWidget):
         else:
             self._relay_connected = False
             self._relay = None
-            self.relay_status_label.setText("Status: Connection failed")
-            self.relay_status_label.setStyleSheet("font-size: 11pt; color: #ff6b6b; font-weight: bold;")
-            self.relay_connect_button.setText("🔌 Connect Relay")
-            self.status_label.setText(f"Relay connection error: {message}")
+
+            # Retry logic
+            self._relay_retry_count += 1
+            if self._relay_retry_count < self._relay_max_retries:
+                remaining = self._relay_max_retries - self._relay_retry_count
+                self.relay_status_label.setText(
+                    f"Status: Retry {self._relay_retry_count}/{self._relay_max_retries} in {self._relay_retry_delay_ms // 1000}s..."
+                )
+                self.relay_status_label.setStyleSheet("font-size: 11pt; color: #ffd43b; font-weight: bold;")
+                self.relay_connect_button.setText(f"⏳ Retrying ({remaining} left)")
+                self.relay_connect_button.setEnabled(False)
+                self.status_label.setText(f"Relay connect failed: {message} — retrying...")
+                if self._relay_worker is not None:
+                    self._relay_worker.deleteLater()
+                self._relay_worker = None
+                QTimer.singleShot(self._relay_retry_delay_ms, self._retry_connect_relay)
+                return
+            else:
+                self._relay_retry_count = 0
+                self.relay_status_label.setText("Status: Connection failed (retries exhausted)")
+                self.relay_status_label.setStyleSheet("font-size: 11pt; color: #ff6b6b; font-weight: bold;")
+                self.relay_connect_button.setText("🔌 Connect Relay")
+                self.status_label.setText(f"Relay connection error: {message}")
 
         if self._relay_worker is not None:
             self._relay_worker.deleteLater()
         self._relay_worker = None
 
+    def _retry_connect_relay(self) -> None:
+        """Retry relay connection (called by QTimer after failure)."""
+        if self._relay_connected:
+            return
+        self.relay_status_label.setText(
+            f"Status: Connecting (attempt {self._relay_retry_count + 1}/{self._relay_max_retries})..."
+        )
+        self.relay_status_label.setStyleSheet("font-size: 11pt; color: #ffd43b; font-weight: bold;")
+        self.relay_connect_button.setText("⏳ Connecting...")
+        self.relay_connect_button.setEnabled(False)
+
+        self._relay_worker = RelayConnectionWorker(self._relay_host, self._relay_port)
+        self._relay_worker.connection_result.connect(self.on_relay_connection_result)
+        self._relay_worker.start()
+
     @Slot()
     def disconnect_relay(self) -> None:
+        self._relay_retry_count = self._relay_max_retries  # stop any pending retries
         try:
             if self._relay is not None and self._relay_connected:
                 _disconnect_relay_hw(self._relay, self._relay_mappings)
@@ -896,6 +987,195 @@ class MainWindow(QWidget):
     @Slot(str)
     def on_status(self, message: str) -> None:
         self.status_label.setText(message)
+
+    # ═══════════════════════════════════════════════════════════
+    #  CONFIG SAVE / LOAD
+    # ═══════════════════════════════════════════════════════════
+
+    def _build_config_dict(self) -> dict:
+        """Collect current app settings into a serialisable dict."""
+        # Selected camera index
+        cam_index = self.camera_combo.currentData()
+
+        # Relay mappings
+        relay_mappings = []
+        for m in self._relay_mappings:
+            relay_mappings.append({
+                "class": m["class"],
+                "channel": m["channel"],
+                "distance_min": m.get("distance_min", 0),
+                "distance_max": m.get("distance_max", 10000),
+            })
+
+        return {
+            "model_path": self._worker._model_path_str if hasattr(self._worker, '_model_path_str') else
+                          str(self._worker._model_path) if hasattr(self._worker, '_model_path') and self._worker._model_path else "",
+            "camera_index": cam_index,
+            "confidence_threshold": self.confidence_slider.value(),
+            "selected_classes": sorted(self._selected_classes),
+            "relay_host": self.relay_host_input.text().strip(),
+            "relay_port": self.relay_port_spin.value(),
+            "relay_mappings": relay_mappings,
+            "compute_device": self.compute_combo.currentText(),
+            "show_center_overlay": self.center_overlay_checkbox.isChecked(),
+            "auto_connect_relay": self._relay_auto_connect or self._relay_connected,
+        }
+
+    @Slot()
+    def save_config(self) -> None:
+        """Save current settings to JSON config file."""
+        try:
+            cfg = self._build_config_dict()
+            # Resolve model path from the label text
+            model_text = self.model_label.text()
+            if model_text and model_text != "No model selected":
+                # Try to keep the full path if available from the worker
+                worker_path = getattr(self._worker, '_model_path', None)
+                if worker_path:
+                    cfg["model_path"] = str(worker_path)
+                else:
+                    cfg["model_path"] = model_text
+            _CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            self.status_label.setText(f"Config saved → {_CONFIG_PATH.name}")
+        except Exception as e:
+            self.status_label.setText(f"Config save error: {e}")
+
+    @Slot()
+    def load_config(self) -> None:
+        """Load settings from JSON config file via file dialog."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Load Config File", str(_CONFIG_PATH.parent), "JSON Files (*.json)"
+        )
+        if not file_path:
+            return
+        try:
+            cfg = json.loads(Path(file_path).read_text(encoding="utf-8"))
+            self._apply_config(cfg)
+            self.status_label.setText(f"Config loaded ← {Path(file_path).name}")
+        except Exception as e:
+            self.status_label.setText(f"Config load error: {e}")
+
+    def _auto_load_config(self) -> None:
+        """Automatically load config from default path on startup."""
+        if not _CONFIG_PATH.exists():
+            return
+        try:
+            cfg = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+            self._apply_config(cfg)
+            self.status_label.setText(f"Config auto-loaded ← {_CONFIG_PATH.name}")
+        except Exception as e:
+            self.status_label.setText(f"Auto-load config error: {e}")
+
+    def _apply_config(self, cfg: dict) -> None:
+        """Apply a config dict to the UI and internal state."""
+        # ── Model ───────────────────────────────────────────────
+        model_path_str = cfg.get("model_path", "")
+        if model_path_str:
+            model_path = Path(model_path_str)
+            if model_path.exists():
+                self.model_label.setText(model_path.name)
+                self._worker.set_model_path(model_path)
+                if YOLO is not None:
+                    try:
+                        device = cfg.get("compute_device", self.compute_combo.currentText())
+                        model = load_model(model_path, device)
+                        self._model_classes = get_model_classes(model)
+                        self._populate_class_filters()
+                    except Exception:
+                        pass
+
+        # ── Compute device ──────────────────────────────────────
+        compute = cfg.get("compute_device", "")
+        if compute:
+            idx = self.compute_combo.findText(compute)
+            if idx >= 0:
+                self.compute_combo.setCurrentIndex(idx)
+
+        # ── Camera ──────────────────────────────────────────────
+        cam_index = cfg.get("camera_index")
+        if cam_index is not None:
+            for i in range(self.camera_combo.count()):
+                if self.camera_combo.itemData(i) == cam_index:
+                    self.camera_combo.setCurrentIndex(i)
+                    break
+
+        # ── Confidence threshold ────────────────────────────────
+        conf = cfg.get("confidence_threshold")
+        if conf is not None:
+            self.confidence_slider.setValue(int(conf))
+
+        # ── Selected classes ────────────────────────────────────
+        saved_classes = cfg.get("selected_classes")
+        if saved_classes is not None and self._model_classes:
+            saved_set = set(saved_classes)
+            for i in range(self.class_filters_layout.count()):
+                widget = self.class_filters_layout.itemAt(i).widget()
+                if isinstance(widget, QCheckBox):
+                    widget.setChecked(widget.text() in saved_set)
+
+        # ── Center overlay ──────────────────────────────────────
+        show_overlay = cfg.get("show_center_overlay")
+        if show_overlay is not None:
+            self.center_overlay_checkbox.setChecked(bool(show_overlay))
+
+        # ── Relay host / port ───────────────────────────────────
+        relay_host = cfg.get("relay_host")
+        if relay_host:
+            self.relay_host_input.setText(relay_host)
+        relay_port = cfg.get("relay_port")
+        if relay_port:
+            self.relay_port_spin.setValue(int(relay_port))
+
+        # ── Relay mappings ──────────────────────────────────────
+        saved_mappings = cfg.get("relay_mappings")
+        if saved_mappings:
+            for row, sm in enumerate(saved_mappings[:8]):
+                # Class combo
+                combo_widget = self.relay_mapping_table.cellWidget(row, 0)
+                if isinstance(combo_widget, QComboBox):
+                    combo = cast(QComboBox, combo_widget)
+                    cls = sm.get("class")
+                    if cls:
+                        idx = combo.findData(cls)
+                        if idx >= 0:
+                            combo.setCurrentIndex(idx)
+                    else:
+                        combo.setCurrentIndex(0)  # None
+
+                # Channel combo
+                ch_widget = self.relay_mapping_table.cellWidget(row, 1)
+                if isinstance(ch_widget, QComboBox):
+                    ch_combo = cast(QComboBox, ch_widget)
+                    ch = sm.get("channel", row + 1)
+                    ch_idx = ch_combo.findData(ch)
+                    if ch_idx >= 0:
+                        ch_combo.setCurrentIndex(ch_idx)
+
+                # Distance min
+                dist_min_w = self.relay_mapping_table.cellWidget(row, 2)
+                if isinstance(dist_min_w, QSpinBox):
+                    dist_min_w.setValue(sm.get("distance_min", 0))
+
+                # Distance max
+                dist_max_w = self.relay_mapping_table.cellWidget(row, 3)
+                if isinstance(dist_max_w, QSpinBox):
+                    dist_max_w.setValue(sm.get("distance_max", 10000))
+
+                # Update internal mapping
+                self._relay_mappings[row]["class"] = sm.get("class")
+                self._relay_mappings[row]["channel"] = sm.get("channel", row + 1)
+                self._relay_mappings[row]["distance_min"] = sm.get("distance_min", 0)
+                self._relay_mappings[row]["distance_max"] = sm.get("distance_max", 10000)
+
+        # ── Auto-connect relay ──────────────────────────────────
+        auto_relay = cfg.get("auto_connect_relay", False)
+        if auto_relay and not self._relay_connected:
+            self._relay_retry_count = 0
+            self.connect_relay()
+
+        # ── Auto-start stream if model and camera are ready ─────
+        if model_path_str and self._model_classes and self.camera_combo.currentData() is not None:
+            self.start_stream()
 
     # ═══════════════════════════════════════════════════════════
     #  LIFECYCLE
