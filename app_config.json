@@ -1,0 +1,64 @@
+{
+  "model_path": "/home/orin_nano/Dev_AI/MHSF_TriangleDetection/2D_Shape.pt",
+  "camera_index": 0,
+  "confidence_threshold": 50,
+  "selected_classes": [
+    "rect",
+    "triangle"
+  ],
+  "relay_host": "192.168.1.201",
+  "relay_port": 502,
+  "relay_mappings": [
+    {
+      "class": "triangle",
+      "channel": 2,
+      "distance_min": 0,
+      "distance_max": 30
+    },
+    {
+      "class": "rect",
+      "channel": 4,
+      "distance_min": 0,
+      "distance_max": 30
+    },
+    {
+      "class": null,
+      "channel": 3,
+      "distance_min": 0,
+      "distance_max": 10000
+    },
+    {
+      "class": null,
+      "channel": 4,
+      "distance_min": 0,
+      "distance_max": 10000
+    },
+    {
+      "class": null,
+      "channel": 5,
+      "distance_min": 0,
+      "distance_max": 10000
+    },
+    {
+      "class": null,
+      "channel": 6,
+      "distance_min": 0,
+      "distance_max": 10000
+    },
+    {
+      "class": null,
+      "channel": 7,
+      "distance_min": 0,
+      "distance_max": 10000
+    },
+    {
+      "class": null,
+      "channel": 8,
+      "distance_min": 0,
+      "distance_max": 10000
+    }
+  ],
+  "compute_device": "cuda",
+  "show_center_overlay": true,
+  "auto_connect_relay": true
+}

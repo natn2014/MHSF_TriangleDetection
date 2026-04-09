@@ -20,7 +20,7 @@ from typing import Any, List, Optional, cast
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt, Signal, Slot, QSize, QTimer
-from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -129,20 +129,30 @@ class MainWindow(QWidget):
     # ═══════════════════════════════════════════════════════════
 
     def _build_header(self) -> None:
+        """Model & config card for the sidebar."""
         self._header_frame = QFrame()
-        header_layout = QHBoxLayout()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        title = QLabel("🤖 Model & Config")
+        title.setStyleSheet("font-size: 11pt; font-weight: bold; color: #00d9ff;")
+        layout.addWidget(title)
 
         self.model_label = QLabel("No model selected")
-        self.model_label.setStyleSheet("font-size: 12pt; font-weight: bold")
+        self.model_label.setStyleSheet("font-size: 10pt; font-weight: bold;")
+        self.model_label.setWordWrap(True)
+        layout.addWidget(self.model_label)
+
         self.load_model_button = QPushButton("📁 Load Model")
         self.load_model_button.clicked.connect(self.load_model)
-        self.load_model_button.setMinimumHeight(40)
+        self.load_model_button.setMinimumHeight(32)
+        layout.addWidget(self.load_model_button)
 
         self.compute_combo = QComboBox()
         self.compute_combo.addItem("cpu")
         self.compute_combo.addItem("cuda")
         self.compute_combo.addItem("cuda:0")
-        self.compute_combo.setMaximumWidth(140)
 
         try:
             if cuda_available():
@@ -155,37 +165,43 @@ class MainWindow(QWidget):
         except Exception:
             self._worker.set_device("cpu")
 
-        self.save_config_button = QPushButton("💾 Save Config")
+        compute_row = QHBoxLayout()
+        compute_row.setSpacing(6)
+        compute_row.addWidget(QLabel("Compute:"), 0)
+        compute_row.addWidget(self.compute_combo, 1)
+        layout.addLayout(compute_row)
+
+        config_row = QHBoxLayout()
+        config_row.setSpacing(6)
+        self.save_config_button = QPushButton("💾 Save")
         self.save_config_button.clicked.connect(self.save_config)
-        self.save_config_button.setMinimumHeight(40)
-        self.save_config_button.setMaximumWidth(140)
-
-        self.load_config_button = QPushButton("📂 Load Config")
+        self.save_config_button.setMinimumHeight(30)
+        self.load_config_button = QPushButton("📂 Load")
         self.load_config_button.clicked.connect(self.load_config)
-        self.load_config_button.setMinimumHeight(40)
-        self.load_config_button.setMaximumWidth(140)
+        self.load_config_button.setMinimumHeight(30)
+        config_row.addWidget(self.save_config_button, 1)
+        config_row.addWidget(self.load_config_button, 1)
+        layout.addLayout(config_row)
 
-        header_layout.addWidget(QLabel("Model:"), 0)
-        header_layout.addWidget(self.model_label, 1)
-        header_layout.addWidget(self.load_model_button, 0)
-        header_layout.addWidget(QLabel("Compute:"), 0)
-        header_layout.addWidget(self.compute_combo, 0)
-        header_layout.addWidget(self.save_config_button, 0)
-        header_layout.addWidget(self.load_config_button, 0)
-        self._header_frame.setLayout(header_layout)
+        self._header_frame.setLayout(layout)
 
     def _build_metrics(self) -> None:
+        """Compact top status bar."""
         self._metrics_frame = QFrame()
+        self._metrics_frame.setStyleSheet(
+            "QFrame { border-bottom: 1px solid #444; }"
+        )
         metrics_layout = QHBoxLayout()
+        metrics_layout.setContentsMargins(8, 4, 8, 4)
 
         self.fps_label = QLabel("FPS: 0")
-        self.fps_label.setStyleSheet("font-size: 11pt; font-weight: bold")
+        self.fps_label.setStyleSheet("font-size: 10pt; font-weight: bold; color: #51cf66;")
 
         self.detections_label = QLabel("Detections: 0")
-        self.detections_label.setStyleSheet("font-size: 11pt; font-weight: bold")
+        self.detections_label.setStyleSheet("font-size: 10pt; font-weight: bold; color: #ffd43b;")
 
         self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("font-size: 10pt")
+        self.status_label.setStyleSheet("font-size: 10pt;")
 
         self.compute_combo.currentTextChanged.connect(self.on_compute_changed)
 
@@ -195,35 +211,50 @@ class MainWindow(QWidget):
         self._metrics_frame.setLayout(metrics_layout)
 
     def _build_camera_controls(self) -> None:
+        """Camera card for the sidebar."""
         self._cam_frame = QFrame()
-        cam_layout = QHBoxLayout()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        title = QLabel("📹 Camera")
+        title.setStyleSheet("font-size: 11pt; font-weight: bold; color: #00d9ff;")
+        layout.addWidget(title)
 
         self.camera_combo = QComboBox()
-        self.camera_combo.setMaximumWidth(240)
+        layout.addWidget(self.camera_combo)
 
-        self.scan_button = QPushButton("🔄 Scan")
+        self.scan_button = QPushButton("🔄 Scan Cameras")
         self.scan_button.clicked.connect(self.scan_cameras)
-        self.scan_button.setMaximumWidth(120)
+        self.scan_button.setMinimumHeight(30)
+        layout.addWidget(self.scan_button)
 
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
         self.start_button = QPushButton("▶ Start")
         self.start_button.clicked.connect(self.start_stream)
-        self.start_button.setMaximumWidth(120)
-
+        self.start_button.setMinimumHeight(32)
+        self.start_button.setStyleSheet(
+            "QPushButton { background-color: #2d5a2d; }"
+            "QPushButton:hover { background-color: #3d7a3d; }"
+        )
         self.stop_button = QPushButton("⏹ Stop")
         self.stop_button.clicked.connect(self.stop_stream)
-        self.stop_button.setMaximumWidth(120)
+        self.stop_button.setMinimumHeight(32)
+        self.stop_button.setStyleSheet(
+            "QPushButton { background-color: #5a2d2d; }"
+            "QPushButton:hover { background-color: #7a3d3d; }"
+        )
+        btn_row.addWidget(self.start_button, 1)
+        btn_row.addWidget(self.stop_button, 1)
+        layout.addLayout(btn_row)
 
-        self.capture_button = QPushButton("📷 Capture")
+        self.capture_button = QPushButton("📷 Capture Frame")
         self.capture_button.clicked.connect(self.capture_frame)
-        self.capture_button.setMaximumWidth(120)
+        self.capture_button.setMinimumHeight(30)
+        layout.addWidget(self.capture_button)
 
-        cam_layout.addWidget(QLabel("Camera:"), 0)
-        cam_layout.addWidget(self.camera_combo, 1)
-        cam_layout.addWidget(self.scan_button, 0)
-        cam_layout.addWidget(self.start_button, 0)
-        cam_layout.addWidget(self.stop_button, 0)
-        cam_layout.addWidget(self.capture_button, 0)
-        self._cam_frame.setLayout(cam_layout)
+        self._cam_frame.setLayout(layout)
 
     def _build_video_display(self) -> None:
         self._video_frame = QFrame()
@@ -262,15 +293,18 @@ class MainWindow(QWidget):
         self._video_frame.setLayout(video_layout)
 
     def _build_filter_panel(self) -> None:
+        """Filters card for the sidebar."""
         self._filter_frame = QFrame()
         filter_layout = QVBoxLayout()
+        filter_layout.setContentsMargins(10, 8, 10, 8)
+        filter_layout.setSpacing(6)
 
-        filter_title = QLabel("🎛️ Filters & Settings")
-        filter_title.setStyleSheet("font-size: 12pt; font-weight: bold")
+        filter_title = QLabel("🎛️ Filters")
+        filter_title.setStyleSheet("font-size: 11pt; font-weight: bold; color: #00d9ff;")
         filter_layout.addWidget(filter_title)
 
         conf_label = QLabel("Confidence Threshold")
-        conf_label.setStyleSheet("font-size: 10pt; font-weight: bold;")
+        conf_label.setStyleSheet("font-size: 9pt; font-weight: bold;")
         filter_layout.addWidget(conf_label)
 
         self.confidence_slider = QSlider(Qt.Orientation.Horizontal)
@@ -286,10 +320,10 @@ class MainWindow(QWidget):
         self.confidence_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         filter_layout.addWidget(self.confidence_label)
 
-        filter_layout.addSpacing(15)
+        filter_layout.addSpacing(8)
 
         classes_label = QLabel("Classes to Show")
-        classes_label.setStyleSheet("font-size: 10pt; font-weight: bold;")
+        classes_label.setStyleSheet("font-size: 9pt; font-weight: bold;")
         filter_layout.addWidget(classes_label)
 
         self.class_filters_scroll = QScrollArea()
@@ -298,10 +332,10 @@ class MainWindow(QWidget):
         self.class_filters_layout = QVBoxLayout()
         self.class_filters_container.setLayout(self.class_filters_layout)
         self.class_filters_scroll.setWidget(self.class_filters_container)
-        self.class_filters_scroll.setMinimumHeight(180)
+        self.class_filters_scroll.setMinimumHeight(100)
         filter_layout.addWidget(self.class_filters_scroll, 1)
 
-        filter_layout.addSpacing(15)
+        filter_layout.addSpacing(8)
 
         self.center_overlay_checkbox = QCheckBox("🎯 Show Center Lines")
         self.center_overlay_checkbox.setChecked(True)
@@ -309,14 +343,16 @@ class MainWindow(QWidget):
         filter_layout.addWidget(self.center_overlay_checkbox)
 
         self._filter_frame.setLayout(filter_layout)
-        self._filter_frame.setMaximumWidth(240)
 
     def _build_detection_table(self) -> None:
+        """Detections card for the sidebar."""
         self._table_frame = QFrame()
         table_layout = QVBoxLayout()
+        table_layout.setContentsMargins(10, 8, 10, 8)
+        table_layout.setSpacing(6)
 
         table_title = QLabel("📊 Detections")
-        table_title.setStyleSheet("font-size: 10pt; font-weight: bold; color: #00d9ff;")
+        table_title.setStyleSheet("font-size: 11pt; font-weight: bold; color: #00d9ff;")
         table_layout.addWidget(table_title)
 
         self.table = QTableWidget(0, 2)
@@ -325,9 +361,9 @@ class MainWindow(QWidget):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table.setAlternatingRowColors(True)
+        self.table.setMaximumHeight(200)
         table_layout.addWidget(self.table)
         self._table_frame.setLayout(table_layout)
-        self._table_frame.setMaximumWidth(240)
 
     def _build_relay_tab(self) -> None:
         self.match_status_label = QLabel("")
@@ -434,27 +470,57 @@ class MainWindow(QWidget):
         self._relay_tab.setLayout(relay_tab_layout)
 
     def _assemble_layout(self) -> None:
-        self.tab_widget = QTabWidget()
+        # ── Card styling for sidebar sections ───────────────────
+        _card_style = (
+            "QFrame#card {"
+            "  border: 1px solid #555555;"
+            "  border-radius: 8px;"
+            "}"
+        )
+        for frame in (self._header_frame, self._cam_frame,
+                      self._filter_frame, self._table_frame):
+            frame.setObjectName("card")
+            frame.setStyleSheet(_card_style)
 
+        # ── Sidebar ─────────────────────────────────────────────
+        sidebar_widget = QWidget()
+        sidebar_layout = QVBoxLayout(sidebar_widget)
+        sidebar_layout.setContentsMargins(4, 4, 4, 4)
+        sidebar_layout.setSpacing(8)
+        sidebar_layout.addWidget(self._header_frame)
+        sidebar_layout.addWidget(self._cam_frame)
+        sidebar_layout.addWidget(self._filter_frame)
+        sidebar_layout.addWidget(self._table_frame)
+        sidebar_layout.addStretch()
+
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setWidget(sidebar_widget)
+        sidebar_scroll.setFixedWidth(280)
+        sidebar_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        # ── Monitor tab ─────────────────────────────────────────
         monitor_tab = QWidget()
-        monitor_layout = QHBoxLayout()
-        monitor_layout.addWidget(self._video_frame, 2)
-        monitor_layout.addWidget(self._filter_frame, 0)
-        monitor_layout.addWidget(self._table_frame, 0)
-        monitor_tab.setLayout(monitor_layout)
+        monitor_layout = QHBoxLayout(monitor_tab)
+        monitor_layout.setContentsMargins(0, 0, 0, 0)
+        monitor_layout.setSpacing(8)
+        monitor_layout.addWidget(sidebar_scroll, 0)
+        monitor_layout.addWidget(self._video_frame, 1)
 
+        # ── Tabs ────────────────────────────────────────────────
+        self.tab_widget = QTabWidget()
         self.tab_widget.addTab(monitor_tab, "📹 Monitor")
         self.tab_widget.addTab(self._relay_tab, "⚡ Relay")
 
-        layout = QVBoxLayout()
-        layout.addWidget(self._header_frame, 0)
+        # ── Main layout ─────────────────────────────────────────
+        layout = QVBoxLayout(self)
         layout.addWidget(self._metrics_frame, 0)
-        layout.addWidget(self._cam_frame, 0)
         layout.addWidget(self.tab_widget, 1)
-
-        self.setLayout(layout)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
     # ═══════════════════════════════════════════════════════════
     #  CAMERA SLOTS
@@ -899,8 +965,8 @@ class MainWindow(QWidget):
         self._total_detections = len(detections)
         self.detections_label.setText(f"Detections: {self._total_detections}")
 
-        # Draw center lines overlay
-        if self._show_center_overlay and detections and pixmap.width() > 0:
+        # Draw center lines overlay (show frame center even without detections)
+        if self._show_center_overlay and pixmap.width() > 0:
             self._center_lines_data = self._draw_center_lines(pixmap, detections)
 
         self._current_pixmap = pixmap
@@ -1199,9 +1265,24 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
+    # ── Dark palette ────────────────────────────────────────────
+    palette = app.palette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(32, 32, 32))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(224, 224, 224))
+    palette.setColor(QPalette.ColorRole.Base, QColor(40, 40, 40))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(50, 50, 50))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(50, 50, 50))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(224, 224, 224))
+    palette.setColor(QPalette.ColorRole.Text, QColor(224, 224, 224))
+    palette.setColor(QPalette.ColorRole.Button, QColor(55, 55, 55))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(224, 224, 224))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 217, 255))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
+    app.setPalette(palette)
+
     window = MainWindow()
     window.resize(1400, 800)
-    window.show()
+    window.showFullScreen()
     sys.exit(app.exec())
 
 

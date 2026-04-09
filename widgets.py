@@ -5,7 +5,7 @@ Reusable widgets used by the main UI.
 
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap, QWheelEvent, QMouseEvent, QKeyEvent
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 
 class _FullscreenWindow(QWidget):
@@ -21,7 +21,35 @@ class _FullscreenWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(label)
+
+        # ── ESC overlay button (top-right) ──────────────────────
+        self._esc_btn = QPushButton("ESC", self)
+        self._esc_btn.setFixedSize(60, 36)
+        self._esc_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: rgba(40, 40, 40, 180);"
+            "  color: #ffffff;"
+            "  border: 1px solid rgba(255, 255, 255, 100);"
+            "  border-radius: 6px;"
+            "  font-size: 14px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: rgba(200, 50, 50, 200);"
+            "}"
+        )
+        self._esc_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._esc_btn.clicked.connect(self.closed.emit)
+        # Raise above video; position is set in resizeEvent
+        self._esc_btn.raise_()
+
         self.showFullScreen()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        margin = 12
+        self._esc_btn.move(self.width() - self._esc_btn.width() - margin, margin)
+        self._esc_btn.raise_()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Escape:

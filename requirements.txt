@@ -1,0 +1,9 @@
+# ── MHSF_TriangleDetection dependencies ────────────────────────
+# NOTE: On Jetson Orin Nano, numpy/opencv/torch are typically
+#       pre-installed by JetPack.  The setup script handles those
+#       separately.  This file lists pip-installable packages.
+
+PySide6>=6.5
+ultralytics>=8.0
+opencv-python>=4.8
+numpy>=1.24
